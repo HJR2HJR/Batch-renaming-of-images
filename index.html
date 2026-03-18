@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图片批量重命名工具 - 亚马逊专用版</title>
+    <!-- 引入外部库：Excel 解析、ZIP 打包、Tailwind CSS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.8);
+            z-index: 1000;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .drop-zone--over {
+            border-color: #4f46e5 !important;
+            background-color: #f5f3ff !important;
+            transform: scale(1.02);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans text-gray-900">
+
+    <!-- 加载动画遮罩 -->
+    <div id="loader" class="loading-overlay">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
+        <p class="text-indigo-900 font-bold" id="loaderText">正在处理图片...</p>
+    </div>
+
+    <div class="max-w-5xl mx-auto py-10 px-4">
+        <!-- 头部标题 -->
+        <div class="text-center mb-10">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">🖼️ 图片批量重命名工具</h1>
+            <p class="text-gray-600">支持文件拖拽上传与自动格式转换，确保文件名与内容完全匹配</p>
+        </div>
+
+        <!-- 后缀与格式设置 -->
+        <div class="bg-white p-6 rounded-xl mb-8 shadow-sm border border-gray-200">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-2">1. 自定义后缀 (不含扩展名):</label>
+                    <input type="text" id="suffixBaseInput" value=".MAIN" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如: .MAIN 或 .PT01">
+                    <p class="mt-1 text-xs text-gray-400">* 系统会自动根据下方格式添加 .jpg 或 .png</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-2">2. 输出格式设置:</label>
+                    <select id="formatSelect" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
+                        <option value="original">保持原图格式 (推荐)</option>
+                        <option value="jpeg">强制统一转换为 JPG</option>
+                        <option value="png">强制统一转换为 PNG</option>
+                    </select>
+                    <p class="mt-1 text-xs text-gray-400">* 选择“统一转换”会重新编码图片，确保上传成功</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 上传区域 -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <!-- Excel 拖拽区 -->
+            <div id="excelDropZone" class="bg-white p-8 rounded-xl shadow-sm border-2 border-dashed border-gray-200 flex flex-col items-center justify-center transition-all duration-200">
+                <h3 class="font-bold text-lg mb-2 flex items-center text-green-700">
+                    <span class="bg-green-100 w-8 h-8 rounded-full flex items-center justify-center mr-2 text-sm">3</span>
+                    上传 Excel 列表
+                </h3>
+                <p class="text-gray-400 text-sm mb-4 text-center">点击选择或将 Excel 文件拖到此处</p>
+                <input type="file" id="excelInput" accept=".xlsx, .xls" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100 cursor-pointer" />
+                <div id="excelStatus" class="mt-4 text-sm font-medium text-green-600"></div>
+            </div>
+
+            <!-- 图片拖拽区 -->
+            <div id="imageDropZone" class="bg-white p-8 rounded-xl shadow-sm border-2 border-dashed border-gray-200 flex flex-col items-center justify-center transition-all duration-200">
+                <h3 class="font-bold text-lg mb-2 flex items-center text-blue-700">
+                    <span class="bg-blue-100 w-8 h-8 rounded-full flex items-center justify-center mr-2 text-sm">4</span>
+                    选择图片文件
+                </h3>
+                <p class="text-gray-400 text-sm mb-4 text-center">点击或将图片/文件夹拖到此处</p>
+                <input type="file" id="imageInput" accept="image/*" multiple webkitdirectory class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer" />
+                <div id="imageStatus" class="mt-4 text-sm font-medium text-blue-600"></div>
+            </div>
+        </div>
+
+        <!-- 预览与操作 -->
+        <div id="mainContainer" class="hidden space-y-6">
+            <div class="bg-white rounded-xl shadow-md overflow-hidden border border-gray-200">
+                <div class="bg-gray-800 px-6 py-4 flex justify-between items-center">
+                    <h3 class="text-white font-bold text-sm md:text-base">重命名预览 (对照检查)</h3>
+                    <div id="matchNotice" class="text-xs font-bold px-3 py-1 rounded bg-yellow-400 text-yellow-900"></div>
+                </div>
+                
+                <div class="max-h-[400px] overflow-y-auto">
+                    <table class="w-full text-left border-collapse text-xs md:text-sm">
+                        <thead class="bg-gray-100 sticky top-0">
+                            <tr>
+                                <th class="px-4 py-3 font-bold text-gray-600 w-16">序号</th>
+                                <th class="px-4 py-3 font-bold text-gray-600">原图名称 (格式)</th>
+                                <th class="px-4 py-3 font-bold text-gray-600">预计导出名称</th>
+                            </tr>
+                        </thead>
+                        <tbody id="previewBody" class="divide-y divide-gray-100"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="flex justify-center pt-4">
+                <button id="downloadBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-10 rounded-full shadow-lg transform transition active:scale-95 flex items-center text-lg">
+                    <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    开始处理并下载 ZIP
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let excelNames = [];
+        let imageFiles = [];
+
+        const excelInput = document.getElementById('excelInput');
+        const imageInput = document.getElementById('imageInput');
+        const excelDropZone = document.getElementById('excelDropZone');
+        const imageDropZone = document.getElementById('imageDropZone');
+        
+        const suffixBaseInput = document.getElementById('suffixBaseInput');
+        const formatSelect = document.getElementById('formatSelect');
+        const mainContainer = document.getElementById('mainContainer');
+        const previewBody = document.getElementById('previewBody');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const loader = document.getElementById('loader');
+        const loaderText = document.getElementById('loaderText');
+
+        // --- 拖拽上传逻辑 ---
+        [
+            { zone: excelDropZone, input: excelInput },
+            { zone: imageDropZone, input: imageInput }
+        ].forEach(({ zone, input }) => {
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                zone.classList.add('drop-zone--over');
+            });
+
+            ['dragleave', 'dragend'].forEach(type => {
+                zone.addEventListener(type, () => {
+                    zone.classList.remove('drop-zone--over');
+                });
+            });
+
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                zone.classList.remove('drop-zone--over');
+                
+                if (e.dataTransfer.files.length) {
+                    input.files = e.dataTransfer.files;
+                    // 手动触发 change 事件
+                    input.dispatchEvent(new Event('change'));
+                }
+            });
+        });
+
+        // 完美模拟 Windows 自然排序 (解决 1 排在 1-1 之后的问题)
+        function windowsLikeSort(a, b) {
+            const cleanA = a.name.split('.').slice(0, -1).join('.').replace(/-/g, '\uFFFF');
+            const cleanB = b.name.split('.').slice(0, -1).join('.').replace(/-/g, '\uFFFF');
+            return cleanA.localeCompare(cleanB, undefined, { numeric: true, sensitivity: 'base' });
+        }
+
+        // 获取预计导出的扩展名
+        function getTargetExt(file) {
+            const mode = formatSelect.value;
+            if (mode === 'jpeg') return '.jpg';
+            if (mode === 'png') return '.png';
+            // 保持原格式
+            const parts = file.name.split('.');
+            return parts.length > 1 ? `.${parts.pop().toLowerCase()}` : '.jpg';
+        }
+
+        // 核心逻辑：转换图片格式 (使用 Canvas 重新编码)
+        async function processImage(file, targetFormat) {
+            if (targetFormat === 'original') return file;
+
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        const ctx = canvas.getContext('2d');
+                        
+                        // 如果转为 JPG，先填充白色背景（防止透明 PNG 转 JPG 后背景变黑）
+                        if (targetFormat === 'jpeg') {
+                            ctx.fillStyle = "#FFFFFF";
+                            ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        }
+                        
+                        ctx.drawImage(img, 0, 0);
+                        const mime = targetFormat === 'jpeg' ? 'image/jpeg' : 'image/png';
+                        canvas.toBlob((blob) => { resolve(blob); }, mime, 0.92); // JPG 质量设为 0.92
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // 配置项改变时实时更新预览
+        [suffixBaseInput, formatSelect].forEach(el => el.addEventListener('input', () => {
+            if (excelNames.length > 0 && imageFiles.length > 0) renderPreview();
+        }));
+
+        // 处理 Excel 读取
+        excelInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const data = new Uint8Array(event.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+                const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                // 提取第一列，跳过表头，过滤空行
+                excelNames = json.slice(1).map(row => row[0]).filter(c => c != null && c.toString().trim() !== "");
+                document.getElementById('excelStatus').innerText = `已读取 ${excelNames.length} 条名称记录`;
+                checkAndRefresh();
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        // 处理图片选择
+        imageInput.addEventListener('change', function(e) {
+            const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+            if (files.length === 0) return;
+            // 应用自然排序
+            imageFiles = files.sort(windowsLikeSort);
+            document.getElementById('imageStatus').innerText = `已选中 ${imageFiles.length} 张图片`;
+            checkAndRefresh();
+        });
+
+        function checkAndRefresh() {
+            if (excelNames.length > 0 && imageFiles.length > 0) {
+                mainContainer.classList.remove('hidden');
+                renderPreview();
+            }
+        }
+
+        // 渲染预览表格
+        function renderPreview() {
+            previewBody.innerHTML = '';
+            const suffixBase = suffixBaseInput.value;
+            const maxLen = Math.max(excelNames.length, imageFiles.length);
+            
+            // 数量匹配状态提示
+            if (excelNames.length === imageFiles.length) {
+                matchNotice.innerText = "✅ 数量完全匹配";
+                matchNotice.className = "text-xs font-bold px-3 py-1 rounded bg-green-400 text-green-900";
+            } else {
+                matchNotice.innerText = `⚠️ 数量不匹配 (Excel: ${excelNames.length}, 图片: ${imageFiles.length})`;
+                matchNotice.className = "text-xs font-bold px-3 py-1 rounded bg-yellow-400 text-yellow-900";
+            }
+
+            for (let i = 0; i < maxLen; i++) {
+                const file = imageFiles[i];
+                const tr = document.createElement('tr');
+                const oldNameDisplay = file ? `${file.name} (${file.type.split('/')[1].toUpperCase()})` : '<span class="text-red-400 font-bold">缺少图片</span>';
+                
+                let newNameDisplay = '<span class="text-red-400 font-bold">缺少数据</span>';
+                if (excelNames[i]) {
+                    const ext = file ? getTargetExt(file) : '';
+                    newNameDisplay = `<span class="text-blue-600 font-medium">${excelNames[i]}${suffixBase}${ext}</span>`;
+                }
+
+                tr.innerHTML = `
+                    <td class="px-4 py-3 text-gray-400">${i+1}</td>
+                    <td class="px-4 py-3 font-mono text-gray-700">${oldNameDisplay}</td>
+                    <td class="px-4 py-3">${newNameDisplay}</td>
+                `;
+                previewBody.appendChild(tr);
+            }
+        }
+
+        // 处理打包下载
+        downloadBtn.addEventListener('click', async function() {
+            const processCount = Math.min(excelNames.length, imageFiles.length);
+            const mode = formatSelect.value;
+            const suffixBase = suffixBaseInput.value;
+
+            loader.style.display = 'flex';
+            downloadBtn.disabled = true;
+            
+            const zip = new JSZip();
+            
+            try {
+                for (let i = 0; i < processCount; i++) {
+                    const file = imageFiles[i];
+                    loaderText.innerText = `正在处理第 ${i+1}/${processCount} 张图片...`;
+                    
+                    const ext = getTargetExt(file);
+                    const newName = `${excelNames[i]}${suffixBase}${ext}`;
+                    
+                    // 转换格式或保持原样
+                    const processedBlob = await processImage(file, mode);
+                    zip.file(newName, processedBlob);
+                }
+
+                loaderText.innerText = "正在打包压缩包...";
+                const content = await zip.generateAsync({ type: "blob" });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = `批量重命名结果_${new Date().getTime()}.zip`;
+                link.click();
+            } catch (err) {
+                alert("处理过程中出错，请检查文件后重试");
+            } finally {
+                loader.style.display = 'none';
+                downloadBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
