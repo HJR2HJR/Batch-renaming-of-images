@@ -1,1 +1,0 @@
-# Batch-renaming-of-images
